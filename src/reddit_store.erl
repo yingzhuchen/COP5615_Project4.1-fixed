@@ -27,7 +27,7 @@
 %%  reddit_inbox        {{ToUser, DmId}}
 %%  reddit_online       {User, ClientPid}
 %%  reddit_ids          {CounterName, Value}     (id counters, push counters)
-%%  reddit_locks        {LockKey}                (short-lived operation locks)
+%%  reddit_locks        {LockKey, OwnerPid}      (per-key operation locks)
 tables() ->
     [{reddit_users, set},
      {reddit_karma, set},

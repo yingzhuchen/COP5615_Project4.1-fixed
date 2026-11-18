@@ -359,15 +359,33 @@ guard(F) ->
 with_lock(Key, F) ->
     acquire_lock(Key),
     try F()
-    after ets:delete(reddit_locks, Key)
+    after
+        case ets:lookup(reddit_locks, Key) of
+            [{Key, Owner}] when Owner =:= self() ->
+                ets:delete(reddit_locks, Key);
+            _ ->
+                ok
+        end
     end.
 
 acquire_lock(Key) ->
-    case ets:insert_new(reddit_locks, {Key}) of
+    Owner = self(),
+    case ets:insert_new(reddit_locks, {Key, Owner}) of
         true -> ok;
         false ->
-            erlang:yield(),
-            acquire_lock(Key)
+            case ets:lookup(reddit_locks, Key) of
+                [{Key, Holder}] ->
+                    case is_pid(Holder) andalso is_process_alive(Holder) of
+                        true ->
+                            erlang:yield(),
+                            acquire_lock(Key);
+                        false ->
+                            ets:delete(reddit_locks, Key),
+                            acquire_lock(Key)
+                    end;
+                [] ->
+                    acquire_lock(Key)
+            end
     end.
 
 need_user(U) -> user_exists(U) orelse throw({error, no_such_user}).

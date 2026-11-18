@@ -15,6 +15,7 @@ ops_test_() ->
       fun votes_and_karma/0,
       fun concurrent_votes/0,
       fun concurrent_membership/0,
+      fun dead_lock_recovery/0,
       fun reposts/0,
       fun direct_messages/0]}.
 
@@ -127,6 +128,17 @@ concurrent_membership() ->
     ?assertEqual(length(Members), reddit_ops:sub_member_count(<<"a">>)),
     ?assertEqual(lists:member(<<"bob">>, Members),
                  lists:member(<<"a">>, reddit_ops:user_subs(<<"bob">>))).
+
+dead_lock_recovery() ->
+    users([<<"alice">>, <<"bob">>]),
+    ok = reddit_ops:create_sub(<<"alice">>, <<"a">>),
+    {ok, P} = reddit_ops:create_post(<<"alice">>, <<"a">>, <<"t">>, <<"b">>),
+    Dead = spawn(fun() -> ok end),
+    receive {'DOWN', _, process, Dead, _} -> ok after 100 -> ok end,
+    Key = {vote, P, <<"bob">>},
+    ets:insert(reddit_locks, {Key, Dead}),
+    ?assertEqual(ok, reddit_ops:vote(<<"bob">>, P, up)),
+    ?assertMatch(#{up := 1, score := 1}, reddit_ops:post_view(P)).
 
 reposts() ->
     users([<<"alice">>, <<"bob">>]),

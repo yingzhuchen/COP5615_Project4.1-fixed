@@ -1,133 +1,134 @@
-# COP5615_Project4.1
-Team members: Qing Li (16912349) Yingzhu Chen(83945095)
+# COP5615 Project 4.1 - Reddit Engine
 
-A Reddit clone engine and a client tester/simulator, written in Erlang/OTP
-(part I: engine + simulator, no REST/WebSocket layer yet). Performance
-results are in [REPORT.md](REPORT.md).
+Team: Qing Li (16912349), Yingzhu Chen (83945095)
 
-## What is implemented
+This project implements a distributed Erlang/OTP Reddit engine and simulator.
+It includes registration, subreddits, posts, reposts, comments, voting with
+karma, feeds, direct messages, live notifications, and a configurable
+Zipf-distributed workload.
 
-**Engine** (one Erlang VM / OS process):
+## Features
 
-| Feature | Request |
+| Area | Operations |
 |---|---|
-| Register account | `{register, User}` |
-| Create, join, leave subreddit | `{create_sub, U, Sub}`, `{join_sub, U, Sub}`, `{leave_sub, U, Sub}` |
-| Text posts and reposts | `{post, U, Sub, Title, Body}`, `{repost, U, Sub, PostId}` |
-| Hierarchical comments (comment on a post or on a comment, any depth) | `{comment, U, ParentId, Body}` |
-| Upvote / downvote / withdraw, karma | `{vote, U, ItemId, up \| down \| none}`, `{get_karma, U}` |
-| Feed of posts from joined subreddits (`hot`, `new`, `top`) | `{get_feed, U, Limit, Sort}` |
-| A post with its full comment tree | `{get_post, U, PostId}` |
-| Direct messages: list, send, reply | `{get_dms, U, Limit}`, `{send_dm, U, To, Body}`, `{reply_dm, U, DmId, Body}` |
-| Live connection | `{connect, U, Pid}`, `{disconnect, U}` |
+| Accounts | `{register, User}`, `{get_karma, User}` |
+| Subreddits | `{create_sub, U, Sub}`, `{join_sub, U, Sub}`, `{leave_sub, U, Sub}` |
+| Content | `{post, U, Sub, Title, Body}`, `{repost, U, Sub, PostId}` |
+| Comments | `{comment, U, ParentId, Body}`, `{get_post, PostId}` |
+| Votes | `{vote, U, ItemId, up|down|none}` |
+| Feeds | `{get_feed, U, Limit, hot|new|top}` |
+| Direct messages | `{send_dm, F, T, Body}`, `{reply_dm, U, DmId, Body}`, `{get_dms, U, Limit}` |
+| Connections | `{connect, U, Pid}`, `{disconnect, U}` |
 
-Connected users get live pushes: a new direct message, a reply to one of their
-posts or comments, and (with `push_posts true`) every new post in their
-subreddits. Offline users catch up through their feed and inbox when they
-reconnect.
+New posts can be pulled through feeds or pushed to online subreddit members.
+DM and reply notifications are pushed to connected users. Offline users catch
+up through feed and inbox requests after reconnecting.
 
-**Simulator**: several independent client OS processes (Erlang nodes). Each
-one runs thousands of simulated users, one Erlang process per user.
+## Current implementation guarantees
 
-- Users alternate between online and offline periods of exponentially
-  distributed length. While online they act about once per `think_ms`. The
-  mix of actions is feed, vote, comment, post, view post, DM, inbox, karma,
-  and join/leave.
-- Subreddit membership follows a Zipf distribution. Each user joins 1–5 subs
-  drawn with P(rank k) ∝ 1/k^s.
-- Popular subreddits get more posts. A user posts to one of their subs
-  chosen with weight 1/k^s, so post counts grow faster than member counts
-  (see the Zipf table in the report).
-- A share of posts (`repost`, default 10%) are reposts of posts the user has
-  seen. Reposts keep a link to the original.
-- Every request is timed on the client. The engine also records its own
-  service time. One report combines both.
+- Engine state is stored in public ETS tables.
+- The pool uses 2 × schedulers workers by default. Requests for the same user
+  are routed to the same worker and therefore remain in order.
+- Individual voting and membership transitions are serialized by short-lived
+  per-key ETS locks.
+- A lock records its owner PID. If that PID is no longer alive, another
+  process removes the stale lock and retries.
+- Normal lock cleanup uses `after` and only removes the lock owned by the
+  current process.
+- Top feeds scan all posts in the user's subscribed subreddits before sorting,
+  rather than limiting candidate posts by recency first.
+- The simulator tracks finished, crashed, and unfinished users and treats
+  unfinished users as a failed run.
+- The DM simulator separates pending and already-replied message IDs. It only
+  replies to a bounded pending sample, as documented in the simulator.
 
-## Layout
+Per-key locks are a defect-recovery improvement, not a distributed consensus
+mechanism. They protect operations in this single Erlang engine node.
 
-```
-src/reddit_store.erl    ETS tables holding all engine state
-src/reddit_ops.erl      engine logic (pure request -> reply over ETS)
-src/reddit_engine.erl   engine worker pool, routing, live pushes
-src/reddit_client.erl   client-side API to a remote engine
-src/reddit_user.erl     one simulated user
-src/reddit_sim.erl      client process driver (one per client OS process)
-src/reddit_main.erl     entry point: starts engine, spawns/coordinates clients
-src/reddit_report.erl   performance report
-src/reddit_zipf.erl     Zipf sampler
-src/reddit_stats.erl    mergeable latency histograms
-test/reddit_tests.erl   engine unit tests
-```
+## Repository layout
 
-### Design
-
-- **Engine state** lives in public ETS tables. Simple updates use atomic ETS
-  operations (`insert_new`, `take`, `update_counter`), while multi-step vote
-  and membership updates use short-lived per-key locks. The engine has no
-  global lock and no single mailbox bottleneck.
-- **Engine workers**: a pool of gen_servers (2 × schedulers). A client sends
-  each request to the worker chosen by `phash2(UserName)`. One user's
-  requests stay in order, and different users run in parallel.
-- **Separate processes**: the engine and each client are separate Erlang VMs
-  talking over Erlang distribution. `sim` mode starts the client VMs with
-  OTP's `peer` module. `engine` + `client` mode lets you start them by hand,
-  on other machines too.
-- **Push fan-out** for new posts is batched: one message per client node,
-  forwarded locally by that node's `reddit_relay` process.
-- `reddit_ops` knows nothing about processes or transport. Part II can put
-  a REST/WebSocket layer in front of it without changes.
-
-## How to run
-
-Requires Erlang/OTP 25 or newer (developed on OTP 29). No other dependencies.
-
-Windows (PowerShell):
-
-```powershell
-.\run.ps1 test                                   # engine unit tests
-.\run.ps1 sim                                    # default: 5000 users, 4 clients, 30 s
-.\run.ps1 sim users 20000 clients 4 duration 60  # any options, key value pairs
+```text
+src/reddit_store.erl    ETS tables and shared state
+src/reddit_ops.erl      engine operations
+src/reddit_engine.erl   worker pool and live pushes
+src/reddit_client.erl   Erlang client API
+src/reddit_user.erl     simulated user state and actions
+src/reddit_sim.erl      client-node driver and result collection
+src/reddit_main.erl     engine coordinator
+src/reddit_report.erl   text report builder
+src/reddit_stats.erl    histogram-based latency statistics
+test/reddit_tests.erl   EUnit tests
+bench.sh                benchmark sweep
+REPORT.md               benchmark and functional test report
 ```
 
-Linux / macOS / Git Bash:
+## Build and test
+
+Requirements: Erlang/OTP 25 or newer.
+
+Linux, macOS, Git Bash:
 
 ```bash
 ./run.sh test
-./run.sh sim users 20000 clients 4 duration 60
-./bench.sh            # the full experiment sweep used in REPORT.md
+./run.sh sim
+./run.sh sim users 10000 clients 4 duration 30
+./bench.sh
 ```
 
-The report is printed and also saved to `results/run_<users>u_<clients>c_<secs>s_<time>.txt`.
+Windows PowerShell:
 
-### Clients started by hand (or on other machines)
+```powershell
+.\run.ps1 test
+.\run.ps1 sim
+.\run.ps1 sim users 10000 clients 4 duration 30
+```
+
+The test command compiles the source and runs `eunit:test(reddit_tests)`.
+GitHub Actions runs the same test command on Ubuntu for pushes and pull requests.
+The workflow is in `.github/workflows/test.yml`.
+
+## Run across machines
 
 ```bash
-./run.sh engine clients 2 users 10000     # terminal 1: prints engine@HOST, waits
-./run.sh client engine@HOST               # terminal 2
-./run.sh client engine@HOST               # terminal 3
+# Engine
+./run.sh engine clients 2 users 10000
+
+# On two client machines or terminals
+./run.sh client engine@HOST
+./run.sh client engine@HOST
 ```
 
-Every node must use the same cookie (`COOKIE` environment variable, default
-`reddit`). The scripts use short names (`-sname`). Across machines with
-different domains, change them to `-name` with full host names.
+All nodes must use the same Erlang cookie. The default cookie is `reddit`;
+set `COOKIE` to a custom value on every node.
 
-### Options
+## Configuration
 
 | Option | Default | Meaning |
-|---|---|---|
-| `users` | 5000 | simulated users in total |
+|---|---:|---|
+| `users` | 5000 | total simulated users |
 | `clients` | 4 | client OS processes |
-| `subs` | 100 | number of subreddits (Zipf ranks) |
+| `subs` | 100 | subreddit count |
 | `zipf_s` | 1.0 | Zipf exponent |
-| `subs_per_user` | 3 | average subs joined per user (1 .. 2n-1) |
-| `duration` | 30 | seconds of simulated activity |
-| `think_ms` | 1000 | mean time between actions of an online user |
-| `online_ms` / `offline_ms` | 20000 / 10000 | mean length of online / offline periods |
-| `stagger_ms` | 3000 | users that start online log in within this window |
-| `repost` | 0.1 | share of posts that are reposts |
-| `push_posts` | false | push each new post to all online members of the sub |
+| `subs_per_user` | 3 | average subscriptions per user |
+| `duration` | 30 | measured run duration in seconds |
+| `think_ms` | 1000 | mean time between online actions |
+| `online_ms` / `offline_ms` | 20000 / 10000 | online/offline period means |
+| `repost` | 0.1 | fraction of repost actions |
+| `push_posts` | false | push every new post to subscribed members |
 | `workers` | 2 × schedulers | engine worker processes |
-| `feed_limit` | 25 | posts per feed request |
-| `seed` | 42 | random seed |
-| `mode` | local | `local` spawns clients itself; `engine` waits for external clients |
-| `out` | results | report directory |
+| `feed_limit` | 25 | maximum posts selected per feed |
+| `seed` | 42 | simulator random seed |
+| `mode` | local | `local` or external `engine` mode |
+
+Reports are printed to stdout and saved under `results/` by default.
+
+## Latency and report caveats
+
+Client latency is the Erlang distributed round trip. Engine service time is
+measured separately inside the engine. Percentiles are approximated from
+power-of-two histogram buckets in `reddit_stats.erl`, not by sorting exact
+samples.
+
+Performance numbers depend heavily on CPU count, VM count, Erlang scheduler
+count, and network layout. Existing Windows 11/OTP 29 results and Linux/OTP 25
+reruns are labeled separately in [REPORT.md](REPORT.md).

@@ -1,21 +1,65 @@
-# Performance report
+# Reddit Engine Performance and Verification Report
 
-All numbers come from `./bench.sh`. The full report of every run is in
-[results/](results/).
+## 1. Test environment and scope
 
-**Machine:** one Windows 11 PC with 8 cores, Erlang/OTP 29. The engine VM and
-all client VMs ran on this one machine and shared its 8 cores, so the
-capacity figures below are a lower bound for the engine.
+The original benchmark data below was collected on one Windows 11 PC with
+8 cores and Erlang/OTP 29. The engine and all client VMs shared that machine.
+The corrected implementation was also benchmarked on the Linux validation
+host with Erlang/OTP 25 and 2 schedulers.
 
-**Default workload:** 100 subreddits, Zipf s = 1.0, 3 subs per user on
-average, 30 s runs. An online user acts about once per second
-(`think_ms 1000`). Users are online for 20 s and offline for 10 s on average
-(about 65% of the time online). 10% of posts are reposts. The engine runs 16
-worker processes.
+These environments are not directly comparable. The Linux rerun establishes
+that the corrected code runs, completes, and produces a valid result; it does
+not replace the original Windows 11 performance measurements.
 
-## 1. Scaling the number of users (4 client processes)
+## 2. New benchmark rerun
 
-| Users | Requests/s | p50 | p95 | p99 | Engine memory (ETS) | Setup: register + join |
+Command:
+
+```bash
+./run.sh sim users 10000 clients 4 duration 30
+```
+
+The run used the default workload: 100 subreddits, Zipf `s = 1.0`,
+about 3 subscriptions per user, 30 seconds of run time, and 4 engine workers
+on the 2-scheduler validation VM.
+
+| Result | New rerun |
+|---|---:|
+| Client requests | 236,437 |
+| Wall time | 30.9 s |
+| Client throughput | 7,650 req/s |
+| Engine throughput | 7,862 req/s |
+| Finished users | 10,000 |
+| Crashed users | 0 |
+| Unfinished users | 0 |
+| Request errors | none |
+| Overall p50 latency | 13.194 ms |
+| Overall p99 latency | 713.355 ms |
+| Engine ETS memory | 38.7 MB |
+
+The Linux rerun was slower than the original 10,000-user Windows measurement.
+No crash, lost user, or request error was observed. The rerun's p99 was much
+higher on this constrained 2-scheduler environment.
+
+The full rerun report is in
+`results/run_10000u_4c_30s_1795045719.txt`.
+
+## 3. Original Windows 11 benchmark baseline
+
+The following values are retained as an **older implementation baseline**.
+They were collected before the per-key lock, stale-lock recovery, full Top
+Feed candidate scan, and unfinished-user accounting changes. `results/`
+contains the original and rerun reports, and reports must not be assumed to
+represent identical code revisions.
+
+**Default workload:** 100 subreddits, Zipf `s = 1.0`, 3 subscriptions per
+user on average, 30-second runs, one action about every second per online
+user, 20-second mean online periods, 10-second mean offline periods, 10%
+reposts, and 16 engine workers.
+
+### 3.1 User scaling
+
+| Users | Requests/s | p50 | p95 | p99 | Engine memory (ETS) | Register + join |
 |---:|---:|---:|---:|---:|---:|---:|
 | 1,000 | 857 | 0.58 ms | 1.3 ms | 1.9 ms | 42 MB (5 MB) | 28 + 51 ms |
 | 5,000 | 4,274 | 0.74 ms | 1.9 ms | 2.0 ms | 65 MB (22 MB) | 90 + 265 ms |
@@ -23,140 +67,104 @@ worker processes.
 | 25,000 | 20,939 | 1.3 ms | 30 ms | 110 ms | 175 MB (106 MB) | 590 + 1432 ms |
 | 50,000 | 25,306 | 615 ms | 1040 ms | 1320 ms | 212 MB (137 MB) | 1127 + 3274 ms |
 
-Latency is the client round trip over Erlang distribution, across all
-operations. Latency percentiles are approximated using power-of-two histogram
-buckets.
+- Throughput grew approximately linearly through 10,000 users in the original
+  environment.
+- The 25,000-user run showed a much larger p99 tail.
+- The 50,000-user run offered more work than the engine could sustain.
 
-- **Up to 10,000 users:** throughput grows linearly with users (about 0.85
-  requests/s per user), and round trips stay under 3.5 ms at p99.
-- **25,000 users:** the 99th percentile starts to rise (110 ms). The machine
-  is close to its limit.
-- **50,000 users:** the offered load would be about 43k requests/s. The
-  system tops out at about 25k requests/s, so requests queue and latency
-  grows to about 0.6 s. In the measured run, no request errors or crashed
-  users were reported.
+### 3.2 Saturation
 
-## 2. Maximum throughput (saturation run)
+A saturation run with 10,000 users acting every 10 ms on average sustained
+30,176 requests/s for 30 seconds in the original environment, with p50
+191 ms and p99 262 ms. This number is an old-baseline saturation measurement,
+not an independent engine-only guarantee.
 
-10,000 users acting every 10 ms on average:
+### 3.3 Client process count
 
-- **30,176 requests/s** sustained for 30 s, with p50 191 ms and p99 262 ms
-  (all queueing).
-- The engine's own **service time stays small**: vote 13 µs, post 141 µs,
-  comment 86 µs, get_feed 654 µs. The feed grows with the amount of content.
-- The measured ceiling of about 25–30k requests/s comes from everything sharing
-  one 8-core box: 5 Erlang VMs, message encoding and decoding, and the
-  distribution connections. The next step to scale would be to put the client
-  processes on other machines (`./run.sh engine` / `./run.sh client`). The
-  engine-only capacity was not measured independently.
-
-## 3. Number of client processes (10,000 users)
-
-| Client processes | Requests/s | p50 | p95 | p99 | Setup: register + join |
+| Client processes | Requests/s | p50 | p95 | p99 | Register + join |
 |---:|---:|---:|---:|---:|---:|
 | 1 | 8,390 | 0.78 ms | 14 ms | 102 ms | 530 + 1693 ms |
 | 2 | 8,460 | 0.74 ms | 2.0 ms | 7.6 ms | 379 + 1454 ms |
 | 4 | 8,497 | 0.41 ms | 1.7 ms | 3.2 ms | 213 + 617 ms |
 | 8 | 8,496 | 0.54 ms | 1.6 ms | 2.1 ms | 216 + 622 ms |
 
-All four configurations carry the same load, but tail latency is much better
-with more client processes. With a single client VM, all 10,000 users share
-one VM and one TCP connection to the engine, and p99 reaches 102 ms. Splitting
-them over 4–8 processes brings p99 down to 2–3 ms.
+The old baseline showed that distributing 10,000 users across 4-8 client
+processes greatly improved p99 tail latency compared with one process.
 
-## 4. Per-operation latency (10,000 users, 4 clients)
+### 3.4 Zipf workload
 
-| Op | Count | avg | p50 | p95 | p99 | Engine service time |
-|---|---:|---:|---:|---:|---:|---:|
-| connect | 16,328 | 472 µs | 378 µs | 1.5 ms | 2.7 ms | 3 µs |
-| post | 17,242 | 535 µs | 379 µs | 1.7 ms | 3.4 ms | 17 µs |
-| repost | 1,824 | 484 µs | 375 µs | 1.7 ms | 3.3 ms | 18 µs |
-| comment | 34,295 | 510 µs | 386 µs | 1.7 ms | 3.4 ms | 17 µs |
-| vote | 57,002 | 496 µs | 358 µs | 1.7 ms | 3.2 ms | 7 µs |
-| get_feed | 55,719 | 671 µs | 625 µs | 1.8 ms | 3.3 ms | 156 µs |
-| get_post (with comment tree) | 15,402 | 505 µs | 391 µs | 1.7 ms | 3.4 ms | 25 µs |
-| send_dm | 7,664 | 484 µs | 379 µs | 1.7 ms | 3.2 ms | 14 µs |
-| reply_dm | 6,241 | 350 µs | 295 µs | 0.9 ms | 1.8 ms | 16 µs |
-| get_dms | 27,838 | 389 µs | 307 µs | 1.0 ms | 2.2 ms | 6 µs |
-| get_karma | 3,744 | 498 µs | 351 µs | 1.7 ms | 3.3 ms | 2 µs |
-| join_sub / leave_sub | 3,951 | 470 µs | 372 µs | 1.7 ms | 3.2 ms | 12–14 µs |
+The original 10,000-user run fit member exponent 0.97 (configured 1.0) and
+post exponent 1.46 (configured 1.0). This measured the expected concentration
+of posts in popular subreddits.
 
-**Where the time goes:** the engine's service time is a small fraction of
-the round trip. Most of the time is network hop and scheduling.
+With fan-out enabled, the original run delivered approximately 24 million
+post notifications in 30 seconds and throughput fell from about 8.5k to
+6.9k requests/s. This is retained as an old baseline; no fan-out rerun is
+reported for the corrected implementation.
 
-**Content produced in this run:**
-- 19,066 posts, of which 9.6% are reposts
-- 34,295 comments, nested up to 6 levels deep
-- 51,070 votes and 13,905 DMs
+## 4. Functional testing
 
-**Live connections:**
-- 16,328 connects and 16,328 disconnects; users were online 64% of the time
-  on average.
-- The engine pushed 10,152 DM notifications and 22,216 reply notifications.
-  Clients received all but one of each; those two were still in flight when
-  the run ended.
-
-## 5. Zipf distribution of subreddit membership and posts
-
-10,000 users, s = 1.0. "Ideal" is members(rank 1) / k^s.
-
-| Rank | Members | Ideal | Posts | Reposts |
-|---:|---:|---:|---:|---:|
-| 1 | 4,559 | 4,559 | 6,684 | 639 |
-| 2 | 2,777 | 2,280 | 2,800 | 267 |
-| 3 | 2,023 | 1,520 | 1,628 | 161 |
-| 5 | 1,175 | 912 | 704 | 63 |
-| 10 | 591 | 456 | 306 | 24 |
-| 20 | 318 | 228 | 102 | 11 |
-| 50 | 131 | 91 | 20 | 5 |
-| 100 | 72 | 46 | 12 | 0 |
-
-**Members:** the least-squares fit of log(members) against log(rank) gives
-an exponent of **0.97** (configured 1.0). With s = 1.5 it gives **1.44**.
-The curve is slightly flatter at the top than the ideal, because a user joins
-distinct subreddits and rank 1 cannot be picked twice.
-
-**Posts:** the fitted exponent is **1.46** (1.88 with s = 1.5). Post counts
-fall off faster than member counts, so the large subreddits get
-disproportionately more posts, as the assignment asks. Rank 1 holds 15% of
-all memberships (46% of users joined it) but gets 35% of all posts: 6,684 in
-30 s.
-
-## 6. Pushing every post to online members (`push_posts true`)
-
-With fan-out on, the engine delivered **24 million post notifications in
-30 s** (about 800k messages/s), batched per client node. That load dominates
-the machine:
-- Request throughput falls from 8.5k to 6.9k requests/s.
-- p99 latency rises to about 1 s.
-- The average service time of get_feed rises from 156 µs to 6.7 ms.
-
-This is why the default delivers posts through the feed (pull) and pushes
-only DMs and replies, the way Reddit's own inbox works.
-
-## 7. Functional testing
-
-The functional suite is run with:
+Run locally:
 
 ```bash
 ./run.sh test
 ```
 
-It currently contains 10 EUnit tests covering accounts, subreddit membership
-and counts, posts and new/top/hot feeds, nested comments, votes and karma
-(including concurrent votes), reposts, direct messages, concurrent
-join/leave consistency, and live notifications. The suite passed all 10 tests
-on Erlang/OTP 25 in the Linux validation environment. On Windows, the same
-command is run through Git Bash or WSL; PowerShell users can use
-`.\run.ps1 test`.
+The suite is EUnit-based and currently contains 11 test groups:
 
-## Summary
+- account registration and karma
+- subreddit creation and membership
+- post, feed, and top-feed behavior
+- nested comments
+- normal and concurrent votes
+- concurrent Join/Leave consistency
+- stale-lock recovery
+- repost behavior
+- direct messages
+- live engine notifications
 
-- On one 8-core machine, the engine and 4 client processes simulate
-  **10,000 concurrent users at about 8.5k requests/s with p99 under 3.5 ms**.
-- **25,000 users** run with p99 around 110 ms.
-- The system sustains about **25–30k requests/s** before requests start to
-  queue.
-- The measured runs reported no request errors or crashed users; each report
-  also records unfinished users separately, and the simulator exits
-  unsuccessfully if any remain.
+Latest local verification:
+
+- Erlang/OTP 25
+- 11 test groups passed
+- 10,000-user benchmark finished all users
+- no crashed or unfinished users
+
+GitHub Actions was added in `.github/workflows/test.yml` to compile and run
+`./run.sh test` on Ubuntu for pushes and pull requests. A green workflow run
+is the independent proof of a current revision; the workflow status is not
+inferred from a local test result alone.
+
+## 5. Correctness changes and remaining caveats
+
+The implementation now serializes each `(ItemId, User)` vote and each
+`(User, Sub)` membership transition. Stale owner PIDs are detected with
+`is_process_alive/1` and reclaimed. Deadlock recovery is limited to stale
+locks on the engine node; it is not a cross-node distributed lock protocol.
+
+Top feed candidates now include all posts in subscribed subreddits. This
+improves historical ranking correctness but can be more expensive as content
+grows.
+
+The benchmark limitation is that old result files describe an earlier code
+revision and environment. The latest Linux rerun supersedes the 10,000-user
+throughput value only for the rerun environment, not for the original
+Windows 11 baseline.
+
+## 6. Report reproducibility
+
+Reproduce the 10,000-user rerun on Linux or Git Bash:
+
+```bash
+./run.sh sim users 10000 clients 4 duration 30
+```
+
+Run the full sweep:
+
+```bash
+./bench.sh
+```
+
+Client and engine latency percentiles are approximate because
+`reddit_stats.erl` uses power-of-two histogram buckets rather than exact
+sorted latency samples.
