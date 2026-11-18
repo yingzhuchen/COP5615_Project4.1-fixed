@@ -13,6 +13,8 @@ ops_test_() ->
       fun posts_and_feed/0,
       fun nested_comments/0,
       fun votes_and_karma/0,
+      fun concurrent_votes/0,
+      fun concurrent_membership/0,
       fun reposts/0,
       fun direct_messages/0]}.
 
@@ -58,6 +60,9 @@ posts_and_feed() ->
     {ok, _P3} = reddit_ops:create_post(<<"bob">>, <<"c">>, <<"other">>, <<"z">>),
     {ok, Feed} = reddit_ops:get_feed(<<"alice">>, 10, new),
     ?assertEqual([P2, P1], [Id || #{id := Id} <- Feed]),     % newest first, no sub c
+    ok = reddit_ops:vote(<<"bob">>, P1, up),
+    {ok, TopFeed} = reddit_ops:get_feed(<<"alice">>, 1, top),
+    ?assertEqual([P1], [Id || #{id := Id} <- TopFeed]),
     ok = reddit_ops:leave_sub(<<"alice">>, <<"b">>),
     {ok, Feed2} = reddit_ops:get_feed(<<"alice">>, 10, hot),
     ?assertEqual([P1], [Id || #{id := Id} <- Feed2]),
@@ -97,6 +102,31 @@ votes_and_karma() ->
     ?assertMatch({ok, #{comment_karma := 0}}, reddit_ops:get_karma(<<"alice">>)),
     ?assertEqual({error, no_such_item}, reddit_ops:vote(<<"bob">>, 99999, up)),
     ?assertEqual({error, bad_direction}, reddit_ops:vote(<<"bob">>, P, sideways)).
+
+concurrent_votes() ->
+    users([<<"alice">>, <<"bob">>]),
+    ok = reddit_ops:create_sub(<<"alice">>, <<"a">>),
+    {ok, P} = reddit_ops:create_post(<<"alice">>, <<"a">>, <<"t">>, <<"b">>),
+    Parent = self(),
+    [spawn(fun() -> Parent ! reddit_ops:vote(<<"bob">>, P, up) end)
+     || _ <- lists:seq(1, 100)],
+    [receive ok -> ok end || _ <- lists:seq(1, 100)],
+    ?assertMatch(#{up := 1, down := 0, score := 1}, reddit_ops:post_view(P)),
+    ?assertMatch({ok, #{post_karma := 1}}, reddit_ops:get_karma(<<"alice">>)).
+
+concurrent_membership() ->
+    users([<<"alice">>, <<"bob">>]),
+    ok = reddit_ops:create_sub(<<"alice">>, <<"a">>),
+    Parent = self(),
+    [spawn(fun() -> Parent ! reddit_ops:join_sub(<<"bob">>, <<"a">>) end)
+     || _ <- lists:seq(1, 50)],
+    [spawn(fun() -> Parent ! reddit_ops:leave_sub(<<"bob">>, <<"a">>) end)
+     || _ <- lists:seq(1, 50)],
+    [receive _ -> ok end || _ <- lists:seq(1, 100)],
+    Members = reddit_ops:sub_members(<<"a">>),
+    ?assertEqual(length(Members), reddit_ops:sub_member_count(<<"a">>)),
+    ?assertEqual(lists:member(<<"bob">>, Members),
+                 lists:member(<<"a">>, reddit_ops:user_subs(<<"bob">>))).
 
 reposts() ->
     users([<<"alice">>, <<"bob">>]),

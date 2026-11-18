@@ -143,7 +143,9 @@ resources(Dones) ->
          [mb(lists:sum([M || #{memory := M} <- Dones]))]),
      fmt("simulated users finished ~w, crashed ~w~n",
          [lists:sum([F || #{finished := F} <- Dones]),
-          lists:sum([C || #{crashed := C} <- Dones])])].
+          lists:sum([C || #{crashed := C} <- Dones])]),
+     fmt("simulated users unfinished ~w~n",
+         [lists:sum([U || #{unfinished := U} <- Dones])])].
 
 tsize(T) -> ets:info(T, size).
 pct(_, 0) -> 0.0;

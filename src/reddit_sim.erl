@@ -36,12 +36,14 @@ run(EngineNode) ->
     Coord ! {joined, Idx},
     DurationMs = receive {go, Ms} -> Ms end,
     [P ! {go, DurationMs} || P <- Pids],
-    {Stats, Cnt, Done, Crash2} = collect(Count - Crash1, DurationMs + 60000, #{}, #{}, 0, Crash1),
+    {Stats, Cnt, Done, Crash2, Unfinished} =
+        collect(Count - Crash1, DurationMs + 60000, #{}, #{}, 0, Crash1),
     Coord ! {done, Idx, #{node => node(), users => Count, finished => Done,
-                          crashed => Crash2, stats => Stats, cnt => Cnt,
+                          crashed => Crash2, unfinished => Unfinished,
+                          stats => Stats, cnt => Cnt,
                           memory => erlang:memory(total)}},
     receive halt -> ok after 300000 -> ok end,
-    erlang:halt(0).
+    erlang:halt(case Unfinished of 0 -> 0; _ -> 1 end).
 
 %% Users First..Last for client Idx (1-based) of K.
 slice(Idx, N, K) ->
@@ -65,7 +67,7 @@ barrier(Tag, N, Crashed) ->
     end.
 
 collect(0, _T, Stats, Cnt, Done, Crashed) ->
-    {Stats, Cnt, Done, Crashed};
+    {Stats, Cnt, Done, Crashed, 0};
 collect(N, T, Stats, Cnt, Done, Crashed) ->
     receive
         {user_done, _Pid, S, C} ->
@@ -75,7 +77,7 @@ collect(N, T, Stats, Cnt, Done, Crashed) ->
             report_crash(Info),
             collect(N - 1, T, Stats, Cnt, Done, Crashed + 1)
     after T ->
-            {Stats, Cnt, Done, Crashed}
+            {Stats, Cnt, Done, Crashed, N}
     end.
 
 report_crash(Info) ->

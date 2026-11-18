@@ -55,7 +55,7 @@ run(Opts) ->
         local -> [spawn_client(I) || I <- lists:seq(1, K)];
         engine -> io:format("waiting for ~p reddit_sim client nodes...~n", [K])
     end,
-    Report = coordinate(Opts),
+    {Report, Dones} = coordinate(Opts),
     io:put_chars(Report),
     File = filename:join(maps:get(out, Opts),
                          io_lib:format("run_~wu_~wc_~ws_~w.txt",
@@ -66,7 +66,8 @@ run(Opts) ->
     ok = file:write_file(File, Report),
     io:format("~nreport written to ~s~n", [File]),
     timer:sleep(500),
-    erlang:halt(0).
+    Unfinished = lists:sum([maps:get(unfinished, D, 0) || D <- Dones]),
+    erlang:halt(case Unfinished of 0 -> 0; _ -> 1 end).
 
 spawn_client(I) ->
     Ebin = filename:dirname(code:which(?MODULE)),
@@ -109,7 +110,7 @@ coordinate(Opts) ->
                                          run_ms => T4 - T3,
                                          engine_stats => EngineStats}),
     [S ! halt || S <- Sims],
-    Report.
+    {Report, Dones}.
 
 wait_all(Tag, K) ->
     [receive {Tag, _} -> ok end || _ <- lists:seq(1, K)],

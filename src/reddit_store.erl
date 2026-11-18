@@ -1,8 +1,8 @@
 %% Owns the ETS tables that hold all engine state.
 %%
 %% Tables are public so every engine worker can read and write them
-%% concurrently; correctness relies on atomic ETS operations
-%% (insert_new, take, update_counter) rather than on a single serialising
+%% concurrently; simple updates use atomic ETS operations, while multi-step
+%% updates use short-lived per-key locks rather than a single serialising
 %% process.
 -module(reddit_store).
 -behaviour(gen_server).
@@ -27,6 +27,7 @@
 %%  reddit_inbox        {{ToUser, DmId}}
 %%  reddit_online       {User, ClientPid}
 %%  reddit_ids          {CounterName, Value}     (id counters, push counters)
+%%  reddit_locks        {LockKey}                (short-lived operation locks)
 tables() ->
     [{reddit_users, set},
      {reddit_karma, set},
@@ -43,7 +44,8 @@ tables() ->
      {reddit_dms, set},
      {reddit_inbox, ordered_set},
      {reddit_online, set},
-     {reddit_ids, set}].
+     {reddit_ids, set},
+     {reddit_locks, set}].
 
 start() ->
     case whereis(?MODULE) of

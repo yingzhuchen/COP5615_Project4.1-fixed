@@ -24,6 +24,7 @@
             posts = [],         % recently seen post ids
             comments = [],      % recently seen comment ids
             pending_dms = [],   % dm ids waiting for a reply
+            replied_dms = [],   % dm ids already answered
             last_dm = 0,
             nposts = 0,
             stats = #{},
@@ -148,8 +149,11 @@ add_online_time(S) ->
     S#u{cnt = reddit_stats:bump(online_ms, now_ms() - S#u.online_since, S#u.cnt)}.
 
 on_push({dm, #{id := Id}}, S) ->
-    S#u{pending_dms = lists:sublist([Id | S#u.pending_dms], 10),
-        cnt = reddit_stats:bump(push_dm, S#u.cnt)};
+    Pending = case lists:member(Id, S#u.replied_dms) of
+                  true -> S#u.pending_dms;
+                  false -> lists:sublist([Id | S#u.pending_dms], 10)
+              end,
+    S#u{pending_dms = Pending, cnt = reddit_stats:bump(push_dm, S#u.cnt)};
 on_push({reply, #{comment_id := C}}, S) ->
     S#u{comments = keep(C, S#u.comments), cnt = reddit_stats:bump(push_reply, S#u.cnt)};
 on_push({new_post, #{id := P}}, S) ->
@@ -247,16 +251,20 @@ do_dm(S) ->
 do_inbox(S) ->
     S2 = case req(get_dms, {get_dms, S#u.name, 20}, S) of
              {{ok, Dms}, S1} ->
-                 New = [Id || #{id := Id} <- Dms, Id > S1#u.last_dm],
+                 New = [Id || #{id := Id} <- Dms,
+                              Id > S1#u.last_dm,
+                              not lists:member(Id, S1#u.replied_dms)],
                  S1#u{last_dm = lists:max([S1#u.last_dm | New]),
                       pending_dms = lists:sublist(lists:usort(New ++ S1#u.pending_dms), 10)};
              {_, S1} -> S1
          end,
     case S2#u.pending_dms of
         [Dm | Rest] when Dm > 0 ->
-            {_, S3} = req(reply_dm, {reply_dm, S2#u.name, Dm, text(2, 10)},
-                          S2#u{pending_dms = Rest}),
-            S3;
+            case req(reply_dm, {reply_dm, S2#u.name, Dm, text(2, 10)},
+                     S2#u{pending_dms = Rest}) of
+                {ok, S3} -> S3#u{replied_dms = keep(Dm, S3#u.replied_dms)};
+                {_, S3} -> S3
+            end;
         _ -> S2
     end.
 

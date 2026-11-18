@@ -61,9 +61,10 @@ test/reddit_tests.erl   engine unit tests
 
 ### Design
 
-- **Engine state** lives in public ETS tables. Integrity comes from atomic
-  ETS operations (`insert_new`, `take`, `update_counter`), not from a single
-  process. So the engine has no global lock and no single mailbox bottleneck.
+- **Engine state** lives in public ETS tables. Simple updates use atomic ETS
+  operations (`insert_new`, `take`, `update_counter`), while multi-step vote
+  and membership updates use short-lived per-key locks. The engine has no
+  global lock and no single mailbox bottleneck.
 - **Engine workers**: a pool of gen_servers (2 × schedulers). A client sends
   each request to the worker chosen by `phash2(UserName)`. One user's
   requests stay in order, and different users run in parallel.

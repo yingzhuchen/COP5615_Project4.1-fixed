@@ -24,7 +24,8 @@ worker processes.
 | 50,000 | 25,306 | 615 ms | 1040 ms | 1320 ms | 212 MB (137 MB) | 1127 + 3274 ms |
 
 Latency is the client round trip over Erlang distribution, across all
-operations.
+operations. Latency percentiles are approximated using power-of-two histogram
+buckets.
 
 - **Up to 10,000 users:** throughput grows linearly with users (about 0.85
   requests/s per user), and round trips stay under 3.5 ms at p99.
@@ -32,8 +33,8 @@ operations.
   is close to its limit.
 - **50,000 users:** the offered load would be about 43k requests/s. The
   system tops out at about 25k requests/s, so requests queue and latency
-  grows to about 0.6 s. Even so, every request completed: no errors and no
-  crashed users.
+  grows to about 0.6 s. In the measured run, no request errors or crashed
+  users were reported.
 
 ## 2. Maximum throughput (saturation run)
 
@@ -43,11 +44,11 @@ operations.
   (all queueing).
 - The engine's own **service time stays small**: vote 13 µs, post 141 µs,
   comment 86 µs, get_feed 654 µs. The feed grows with the amount of content.
-- With 16 workers, the engine logic alone could serve well above 100k
-  requests/s. The ceiling of about 25–30k requests/s comes from everything
-  sharing one 8-core box: 5 Erlang VMs, message encoding and decoding, and
-  the distribution connections. The next step to scale would be to put the
-  client processes on other machines (`./run.sh engine` / `./run.sh client`).
+- The measured ceiling of about 25–30k requests/s comes from everything sharing
+  one 8-core box: 5 Erlang VMs, message encoding and decoding, and the
+  distribution connections. The next step to scale would be to put the client
+  processes on other machines (`./run.sh engine` / `./run.sh client`). The
+  engine-only capacity was not measured independently.
 
 ## 3. Number of client processes (10,000 users)
 
@@ -133,6 +134,22 @@ the machine:
 This is why the default delivers posts through the feed (pull) and pushes
 only DMs and replies, the way Reddit's own inbox works.
 
+## 7. Functional testing
+
+The functional suite is run with:
+
+```bash
+./run.sh test
+```
+
+It currently contains 10 EUnit tests covering accounts, subreddit membership
+and counts, posts and new/top/hot feeds, nested comments, votes and karma
+(including concurrent votes), reposts, direct messages, concurrent
+join/leave consistency, and live notifications. The suite passed all 10 tests
+on Erlang/OTP 25 in the Linux validation environment. On Windows, the same
+command is run through Git Bash or WSL; PowerShell users can use
+`.\run.ps1 test`.
+
 ## Summary
 
 - On one 8-core machine, the engine and 4 client processes simulate
@@ -140,4 +157,6 @@ only DMs and replies, the way Reddit's own inbox works.
 - **25,000 users** run with p99 around 110 ms.
 - The system sustains about **25–30k requests/s** before requests start to
   queue.
-- No run returned an error or lost a simulated user.
+- The measured runs reported no request errors or crashed users; each report
+  also records unfinished users separately, and the simulator exits
+  unsuccessfully if any remain.

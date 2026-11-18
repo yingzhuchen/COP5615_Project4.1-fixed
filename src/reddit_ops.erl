@@ -47,28 +47,32 @@ create_sub(User, Sub) ->
     end).
 
 join_sub(User, Sub) ->
-    guard(fun() ->
-        need_user(User),
-        need_sub(Sub),
-        case ets:insert_new(reddit_user_subs, {{User, Sub}}) of
-            true ->
-                ets:insert(reddit_sub_members, {{Sub, User}}),
-                ets:update_counter(reddit_sub_count, Sub, {2, 1}, {Sub, 0}),
-                ok;
-            false ->
-                {error, already_member}
-        end
-    end).
+    with_lock({membership, User, Sub}, fun() ->
+                      guard(fun() ->
+                                    need_user(User),
+                                    need_sub(Sub),
+                                    case ets:insert_new(reddit_user_subs, {{User, Sub}}) of
+                                        true ->
+                                            ets:insert(reddit_sub_members, {{Sub, User}}),
+                                            ets:update_counter(reddit_sub_count, Sub, {2, 1}, {Sub, 0}),
+                                            ok;
+                                        false ->
+                                            {error, already_member}
+                                    end
+                            end)
+              end).
 
 leave_sub(User, Sub) ->
-    case ets:take(reddit_user_subs, {User, Sub}) of
-        [_] ->
-            ets:delete(reddit_sub_members, {Sub, User}),
-            ets:update_counter(reddit_sub_count, Sub, {2, -1}, {Sub, 0}),
-            ok;
-        [] ->
-            {error, not_member}
-    end.
+    with_lock({membership, User, Sub}, fun() ->
+                      case ets:take(reddit_user_subs, {User, Sub}) of
+                          [_] ->
+                              ets:delete(reddit_sub_members, {Sub, User}),
+                              ets:update_counter(reddit_sub_count, Sub, {2, -1}, {Sub, 0}),
+                              ok;
+                          [] ->
+                              {error, not_member}
+                      end
+              end).
 
 user_subs(User) ->
     ets:select(reddit_user_subs, [{{{User, '$1'}}, [], ['$1']}]).
@@ -189,44 +193,46 @@ item_author(Id) ->
 %% applies only the difference. The author's karma moves with the item's
 %% score, except for votes on one's own items.
 vote(User, ItemId, Dir) ->
-    guard(fun() ->
-        need_user(User),
-        New = case Dir of
-                  up -> 1;
-                  down -> -1;
-                  none -> 0;
-                  _ -> throw({error, bad_direction})
-              end,
-        {Author, Kind} =
-            case ets:lookup(reddit_scores, ItemId) of
-                [{_, _, _, A, K, _}] -> {A, K};
-                [] -> throw({error, no_such_item})
-            end,
-        Key = {ItemId, User},
-        Old = case ets:lookup(reddit_votes, Key) of
-                  [{_, V}] -> V;
-                  [] -> 0
-              end,
-        case New - Old of
-            0 -> ok;
-            Delta ->
-                UpD = b2i(New =:= 1) - b2i(Old =:= 1),
-                DownD = b2i(New =:= -1) - b2i(Old =:= -1),
-                ets:update_counter(reddit_scores, ItemId, [{2, UpD}, {3, DownD}]),
-                case New of
-                    0 -> ets:delete(reddit_votes, Key);
-                    _ -> ets:insert(reddit_votes, {Key, New})
-                end,
-                case Author =:= User of
-                    true -> ok;
-                    false ->
-                        Pos = case Kind of post -> 2; comment -> 3 end,
-                        ets:update_counter(reddit_karma, Author, {Pos, Delta},
-                                           {Author, 0, 0}),
-                        ok
-                end
-        end
-    end).
+    with_lock({vote, ItemId, User}, fun() ->
+                      guard(fun() ->
+                                    need_user(User),
+                                    New = case Dir of
+                                              up -> 1;
+                                              down -> -1;
+                                              none -> 0;
+                                              _ -> throw({error, bad_direction})
+                                          end,
+                                    {Author, Kind} =
+                                        case ets:lookup(reddit_scores, ItemId) of
+                                            [{_, _, _, A, K, _}] -> {A, K};
+                                            [] -> throw({error, no_such_item})
+                                        end,
+                                    Key = {ItemId, User},
+                                    Old = case ets:lookup(reddit_votes, Key) of
+                                              [{_, V}] -> V;
+                                              [] -> 0
+                                          end,
+                                    case New - Old of
+                                        0 -> ok;
+                                        Delta ->
+                                            UpD = b2i(New =:= 1) - b2i(Old =:= 1),
+                                            DownD = b2i(New =:= -1) - b2i(Old =:= -1),
+                                            ets:update_counter(reddit_scores, ItemId, [{2, UpD}, {3, DownD}]),
+                                            case New of
+                                                0 -> ets:delete(reddit_votes, Key);
+                                                _ -> ets:insert(reddit_votes, {Key, New})
+                                            end,
+                                            case Author =:= User of
+                                                true -> ok;
+                                                false ->
+                                                    Pos = case Kind of post -> 2; comment -> 3 end,
+                                                    ets:update_counter(reddit_karma, Author, {Pos, Delta},
+                                                                       {Author, 0, 0}),
+                                                    ok
+                                            end
+                                    end
+                            end)
+              end).
 
 %% -------------------------------------------------------------------- feed
 
@@ -234,8 +240,11 @@ vote(User, ItemId, Dir) ->
 get_feed(User, Limit, Sort) ->
     guard(fun() ->
         need_user(User),
-        Ids = lists:append([latest_ids(reddit_sub_posts, S, Limit)
-                            || S <- user_subs(User)]),
+        Ids = case Sort of
+                  top -> lists:append([all_ids(reddit_sub_posts, S) || S <- user_subs(User)]);
+                  _ -> lists:append([latest_ids(reddit_sub_posts, S, Limit)
+                                     || S <- user_subs(User)])
+              end,
         Views = [V || Id <- Ids, V <- [post_view(Id)], V =/= undefined],
         {ok, lists:sublist(sort_posts(Sort, Views), Limit)}
     end).
@@ -264,6 +273,9 @@ latest_ids(Table, Prefix, {Prefix, Id} = Key, N, Acc) ->
     latest_ids(Table, Prefix, ets:prev(Table, Key), N - 1, [Id | Acc]);
 latest_ids(_, _, _, _, Acc) ->
     lists:reverse(Acc).
+
+all_ids(Table, Prefix) ->
+    ets:select(Table, [{{{Prefix, '$1'}}, [], ['$1']}]).
 
 %% ---------------------------------------------------------- direct messages
 
@@ -342,6 +354,20 @@ b2i(false) -> 0.
 guard(F) ->
     try F()
     catch throw:{error, _} = E -> E
+    end.
+
+with_lock(Key, F) ->
+    acquire_lock(Key),
+    try F()
+    after ets:delete(reddit_locks, Key)
+    end.
+
+acquire_lock(Key) ->
+    case ets:insert_new(reddit_locks, {Key}) of
+        true -> ok;
+        false ->
+            erlang:yield(),
+            acquire_lock(Key)
     end.
 
 need_user(U) -> user_exists(U) orelse throw({error, no_such_user}).
