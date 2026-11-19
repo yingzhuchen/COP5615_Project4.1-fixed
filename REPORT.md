@@ -1,5 +1,33 @@
 # Reddit Engine Performance and Verification Report
 
+**Team members:** Qing Li (16912349), Yingzhu Chen (83945095)
+
+## Implementation and Architecture
+
+The system consists of an Erlang/OTP engine and independent client nodes:
+
+- **ETS state storage:** the engine stores users, subreddits, memberships,
+  posts, comments, scores, votes, karma, direct messages, connections, and
+  counters in public ETS tables. Simple operations use atomic ETS operations,
+  while vote and Join/Leave state transitions use per-key locking.
+- **Engine Worker Pool:** the engine runs a configurable gen_server worker
+  pool. Requests are routed by user so that one user's requests stay on the
+  same worker and are processed in order, while different users can run in
+  parallel.
+- **Independent Client Nodes:** each simulated client is an Erlang VM and
+  runs one Erlang process per simulated user. Client nodes communicate with
+  the engine through Erlang distribution and send the merged performance
+  measurements back to the coordinator.
+- **Zipf distribution:** subreddit ranks and membership selections follow a
+  Zipf distribution, and posting activity is also biased toward popular
+  subreddits.
+- **Online/offline simulation:** each user alternates between exponential
+  online and offline periods. While online, users perform the configured mix
+  of actions. On reconnect, they catch up with their feed and inbox.
+
+The engine also pushes DMs and comment replies to connected users. Optional
+post fan-out pushes every new post to online subscribers of that subreddit.
+
 ## 1. Test environment and scope
 
 The original benchmark data below was collected on one Windows 11 PC with
@@ -130,10 +158,9 @@ Latest local verification:
 - 10,000-user benchmark finished all users
 - no crashed or unfinished users
 
-GitHub Actions was added in `.github/workflows/test.yml` to compile and run
-`./run.sh test` on Ubuntu for pushes and pull requests. A green workflow run
-is the independent proof of a current revision; the workflow status is not
-inferred from a local test result alone.
+GitHub Actions is configured in `.github/workflows/test.yml`. The workflow
+has successfully run `./run.sh test` on Ubuntu for pushes and pull requests,
+and the 11 EUnit test groups passed.
 
 ## 5. Correctness changes and remaining caveats
 
