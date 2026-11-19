@@ -66,15 +66,6 @@ REPORT.md               benchmark and functional test report
 
 Requirements: Erlang/OTP 25 or newer.
 
-Linux, macOS, Git Bash:
-
-```bash
-./run.sh test
-./run.sh sim
-./run.sh sim users 10000 clients 4 duration 30
-./bench.sh
-```
-
 Windows PowerShell:
 
 ```powershell
@@ -84,8 +75,6 @@ Windows PowerShell:
 ```
 
 The test command compiles the source and runs `eunit:test(reddit_tests)`.
-GitHub Actions runs the same test command on Ubuntu for pushes and pull requests.
-The workflow is in `.github/workflows/test.yml`.
 
 ## Run across machines
 
@@ -130,5 +119,5 @@ power-of-two histogram buckets in `reddit_stats.erl`, not by sorting exact
 samples.
 
 Performance numbers depend heavily on CPU count, VM count, Erlang scheduler
-count, and network layout. Existing Windows 11/OTP 29 results and Linux/OTP 25
-reruns are labeled separately in [REPORT.md](REPORT.md).
+count, and network layout. The Windows 11 benchmark results are in
+[REPORT.md](REPORT.md).

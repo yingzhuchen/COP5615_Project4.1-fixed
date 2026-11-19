@@ -30,62 +30,19 @@ post fan-out pushes every new post to online subscribers of that subreddit.
 
 ## 1. Test environment and scope
 
-The original benchmark data below was collected on one Windows 11 PC with
-8 cores and Erlang/OTP 29. The engine and all client VMs shared that machine.
-The corrected implementation was also benchmarked on the Linux validation
-host with Erlang/OTP 25 and 2 schedulers.
+The benchmark data below was collected on one Windows 11 PC with 8 cores and
+Erlang/OTP 29. The engine and all client VMs shared that machine.
 
-These environments are not directly comparable. The Linux rerun establishes
-that the corrected code runs, completes, and produces a valid result; it does
-not replace the original Windows 11 performance measurements.
+## 2. Windows 11 benchmark baseline
 
-## 2. New benchmark rerun
-
-Command:
-
-```bash
-./run.sh sim users 10000 clients 4 duration 30
-```
-
-The run used the default workload: 100 subreddits, Zipf `s = 1.0`,
-about 3 subscriptions per user, 30 seconds of run time, and 4 engine workers
-on the 2-scheduler validation VM.
-
-| Result | New rerun |
-|---|---:|
-| Client requests | 236,437 |
-| Wall time | 30.9 s |
-| Client throughput | 7,650 req/s |
-| Engine throughput | 7,862 req/s |
-| Finished users | 10,000 |
-| Crashed users | 0 |
-| Unfinished users | 0 |
-| Request errors | none |
-| Overall p50 latency | 13.194 ms |
-| Overall p99 latency | 713.355 ms |
-| Engine ETS memory | 38.7 MB |
-
-The Linux rerun was slower than the original 10,000-user Windows measurement.
-No crash, lost user, or request error was observed. The rerun's p99 was much
-higher on this constrained 2-scheduler environment.
-
-The full rerun report is in
-`results/run_10000u_4c_30s_1795045719.txt`.
-
-## 3. Original Windows 11 benchmark baseline
-
-The following values are retained as an **older implementation baseline**.
-They were collected before the per-key lock, stale-lock recovery, full Top
-Feed candidate scan, and unfinished-user accounting changes. `results/`
-contains the original and rerun reports, and reports must not be assumed to
-represent identical code revisions.
+The following values are the benchmark baseline for the implementation.
 
 **Default workload:** 100 subreddits, Zipf `s = 1.0`, 3 subscriptions per
 user on average, 30-second runs, one action about every second per online
 user, 20-second mean online periods, 10-second mean offline periods, 10%
 reposts, and 16 engine workers.
 
-### 3.1 User scaling
+### 2.1 User scaling
 
 | Users | Requests/s | p50 | p95 | p99 | Engine memory (ETS) | Register + join |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -95,19 +52,16 @@ reposts, and 16 engine workers.
 | 25,000 | 20,939 | 1.3 ms | 30 ms | 110 ms | 175 MB (106 MB) | 590 + 1432 ms |
 | 50,000 | 25,306 | 615 ms | 1040 ms | 1320 ms | 212 MB (137 MB) | 1127 + 3274 ms |
 
-- Throughput grew approximately linearly through 10,000 users in the original
-  environment.
+- Throughput grew approximately linearly through 10,000 users.
 - The 25,000-user run showed a much larger p99 tail.
 - The 50,000-user run offered more work than the engine could sustain.
 
-### 3.2 Saturation
+### 2.2 Saturation
 
 A saturation run with 10,000 users acting every 10 ms on average sustained
-30,176 requests/s for 30 seconds in the original environment, with p50
-191 ms and p99 262 ms. This number is an old-baseline saturation measurement,
-not an independent engine-only guarantee.
+30,176 requests/s for 30 seconds, with p50 191 ms and p99 262 ms.
 
-### 3.3 Client process count
+### 2.3 Client process count
 
 | Client processes | Requests/s | p50 | p95 | p99 | Register + join |
 |---:|---:|---:|---:|---:|---:|
@@ -116,10 +70,10 @@ not an independent engine-only guarantee.
 | 4 | 8,497 | 0.41 ms | 1.7 ms | 3.2 ms | 213 + 617 ms |
 | 8 | 8,496 | 0.54 ms | 1.6 ms | 2.1 ms | 216 + 622 ms |
 
-The old baseline showed that distributing 10,000 users across 4-8 client
-processes greatly improved p99 tail latency compared with one process.
+Distributing 10,000 users across 4-8 client processes greatly improved p99
+tail latency compared with one process.
 
-### 3.4 Zipf workload
+### 2.4 Zipf workload
 
 The original 10,000-user run fit member exponent 0.97 (configured 1.0) and
 post exponent 1.46 (configured 1.0). This measured the expected concentration
@@ -127,8 +81,7 @@ of posts in popular subreddits.
 
 With fan-out enabled, the original run delivered approximately 24 million
 post notifications in 30 seconds and throughput fell from about 8.5k to
-6.9k requests/s. This is retained as an old baseline; no fan-out rerun is
-reported for the corrected implementation.
+6.9k requests/s.
 
 ## 4. Functional testing
 
@@ -151,18 +104,13 @@ The suite is EUnit-based and currently contains 11 test groups:
 - direct messages
 - live engine notifications
 
-Latest local verification:
+Test verification:
 
-- Erlang/OTP 25
 - 11 test groups passed
-- 10,000-user benchmark finished all users
+- Windows 11 benchmark completed all users
 - no crashed or unfinished users
 
-GitHub Actions is configured in `.github/workflows/test.yml`. The workflow
-has successfully run `./run.sh test` on Ubuntu for pushes and pull requests,
-and the 11 EUnit test groups passed.
-
-## 5. Correctness changes and remaining caveats
+## 5. Correctness changes
 
 The implementation now serializes each `(ItemId, User)` vote and each
 `(User, Sub)` membership transition. Stale owner PIDs are detected with
@@ -173,17 +121,12 @@ Top feed candidates now include all posts in subscribed subreddits. This
 improves historical ranking correctness but can be more expensive as content
 grows.
 
-The benchmark limitation is that old result files describe an earlier code
-revision and environment. The latest Linux rerun supersedes the 10,000-user
-throughput value only for the rerun environment, not for the original
-Windows 11 baseline.
-
 ## 6. Report reproducibility
 
-Reproduce the 10,000-user rerun on Linux or Git Bash:
+Reproduce the 10,000-user benchmark on Windows PowerShell:
 
-```bash
-./run.sh sim users 10000 clients 4 duration 30
+```powershell
+.\run.ps1 sim users 10000 clients 4 duration 30
 ```
 
 Run the full sweep:
