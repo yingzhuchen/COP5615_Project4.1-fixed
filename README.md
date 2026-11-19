@@ -66,7 +66,13 @@ REPORT.md               benchmark and functional test report
 
 Requirements: Erlang/OTP 25 or newer.
 
-Windows PowerShell:
+Run the tests:
+
+```bash
+./run.sh test
+```
+
+PowerShell:
 
 ```powershell
 .\run.ps1 test
@@ -119,5 +125,4 @@ power-of-two histogram buckets in `reddit_stats.erl`, not by sorting exact
 samples.
 
 Performance numbers depend heavily on CPU count, VM count, Erlang scheduler
-count, and network layout. The Windows 11 benchmark results are in
-[REPORT.md](REPORT.md).
+count, and network layout. The benchmark results are in [REPORT.md](REPORT.md).

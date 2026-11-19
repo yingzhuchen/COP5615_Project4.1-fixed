@@ -4,6 +4,8 @@
 
 ## Implementation and Architecture
 
+The Reddit engine supports user registration, subreddit creation and membership management, posts and reposts, nested comments, upvotes and downvotes with karma tracking, personalized feeds, direct messages, and message replies.
+
 The system consists of an Erlang/OTP engine and independent client nodes:
 
 - **ETS state storage:** the engine stores users, subreddits, memberships,
@@ -30,10 +32,10 @@ post fan-out pushes every new post to online subscribers of that subreddit.
 
 ## 1. Test environment and scope
 
-The benchmark data below was collected on one Windows 11 PC with 8 cores and
+The benchmark data below was collected on one test PC with 8 cores and
 Erlang/OTP 29. The engine and all client VMs shared that machine.
 
-## 2. Windows 11 benchmark baseline
+## 2. Benchmark baseline
 
 The following values are the benchmark baseline for the implementation.
 
@@ -83,7 +85,7 @@ With fan-out enabled, the original run delivered approximately 24 million
 post notifications in 30 seconds and throughput fell from about 8.5k to
 6.9k requests/s.
 
-## 4. Functional testing
+## 3. Functional testing
 
 Run locally:
 
@@ -107,10 +109,10 @@ The suite is EUnit-based and currently contains 11 test groups:
 Test verification:
 
 - 11 test groups passed
-- Windows 11 benchmark completed all users
+- the benchmark completed all users
 - no crashed or unfinished users
 
-## 5. Correctness changes
+## 4. Correctness changes
 
 The implementation now serializes each `(ItemId, User)` vote and each
 `(User, Sub)` membership transition. Stale owner PIDs are detected with
@@ -121,9 +123,9 @@ Top feed candidates now include all posts in subscribed subreddits. This
 improves historical ranking correctness but can be more expensive as content
 grows.
 
-## 6. Report reproducibility
+## 5. Report reproducibility
 
-Reproduce the 10,000-user benchmark on Windows PowerShell:
+Reproduce the 10,000-user benchmark:
 
 ```powershell
 .\run.ps1 sim users 10000 clients 4 duration 30
